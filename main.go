@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -14,70 +16,95 @@ import (
 
 type CustomTitleBar struct {
 	widget.BaseWidget
+	Title       string
+	CloseButton *widget.Button
 	OnClickHold func()
+
+	holdMutex    sync.Mutex
+	cancelHoldCh chan struct{}
 }
 
 func NewCustomTitleBar() *CustomTitleBar {
-	titleBar := &CustomTitleBar{}
+	titleBar := &CustomTitleBar{
+		cancelHoldCh: make(chan struct{}),
+	}
 	titleBar.ExtendBaseWidget(titleBar)
 	return titleBar
 }
 
 func (t *CustomTitleBar) CreateRenderer() fyne.WidgetRenderer {
-	// Crear un botón de cierre personalizado (sin bordes)
-	closeButton := widget.NewButton("", func() {
-
-	})
-	closeButton.Importance = widget.LowImportance // Estilo flat, sin resaltado
-	closeButton.SetIcon(theme.CancelIcon())       // Usar un ícono "X"
-
-	// Crear la barra de título personalizada
-	title := widget.NewLabel("Mi Aplicación")
-
-	// Crear la caja contenedora
+	title := widget.NewLabel(t.Title)
 	bar := container.NewHBox(
 		title,
 		layout.NewSpacer(),
-		closeButton,
+		t.CloseButton,
 	)
-
 	return widget.NewSimpleRenderer(bar)
 }
 
-// MouseDown se llama cuando se presiona el mouse sobre la barra de título
 func (t *CustomTitleBar) MouseDown(ev *desktop.MouseEvent) {
-	go func() {
-		time.Sleep(1 * time.Second) // Esperar un segundo para detectar si es un clic sostenido
-		if t.OnClickHold != nil {
-			t.OnClickHold()
+	t.holdMutex.Lock()
+	defer t.holdMutex.Unlock()
+
+	// Reset previous hold detection
+	t.cancelHoldCh = make(chan struct{})
+
+	go func(cancelCh chan struct{}) {
+		select {
+		case <-time.After(1 * time.Second):
+			if t.OnClickHold != nil {
+				t.OnClickHold()
+			}
+		case <-cancelCh:
+			// Canceled hold detection
 		}
-	}()
+	}(t.cancelHoldCh)
 }
+
+func (t *CustomTitleBar) MouseUp(ev *desktop.MouseEvent) {
+	t.holdMutex.Lock()
+	defer t.holdMutex.Unlock()
+	close(t.cancelHoldCh) // Cancel any ongoing hold detection
+}
+
+func (t *CustomTitleBar) MouseMoved(ev *desktop.MouseEvent) {
+	// Optional: Handle mouse moved events if needed
+}
+
+func (t *CustomTitleBar) MouseOut() {
+	// Optional: Handle mouse out events if needed
+}
+
+func (t *CustomTitleBar) MouseIn(ev *desktop.MouseEvent) {
+	// Optional: Handle mouse in events if needed
+}
+
+var _ desktop.Hoverable = (*CustomTitleBar)(nil) // Asserting that CustomTitleBar implements Hoverable
+var _ desktop.Mouseable = (*CustomTitleBar)(nil) // Asserting that CustomTitleBar implements Mouseable
 
 func main() {
 	myApp := app.New()
 
 	if drv, ok := myApp.Driver().(desktop.Driver); ok {
 		splashWindow := drv.CreateSplashWindow()
+		splashWindow.SetMaster()
 
-		// Crear un botón de cierre personalizado (sin bordes)
 		closeButton := widget.NewButton("", func() {
+
 			splashWindow.Close()
 		})
-		closeButton.Importance = widget.LowImportance // Estilo flat, sin resaltado
-		closeButton.SetIcon(theme.CancelIcon())       // Usar un ícono "X"
+		closeButton.Importance = widget.LowImportance
+		closeButton.SetIcon(theme.CancelIcon())
 
-		// Crear la barra de título personalizada
-		titleBar := container.NewHBox(
-			widget.NewLabel("Mi Aplicación"),
-			layout.NewSpacer(),
-			closeButton,
-		)
+		titleBar := NewCustomTitleBar()
+		titleBar.Title = "My App"
+		titleBar.OnClickHold = func() {
+			fmt.Println("click hold")
+		}
+		titleBar.CloseButton = closeButton
 
-		// Contenido principal de la ventana
 		content := widget.NewLabel("Contenido principal")
 
-		// Agregar la barra de título y contenido a la ventana
 		splashWindow.SetContent(container.NewVBox(
 			titleBar,
 			content,
